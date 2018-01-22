@@ -78,7 +78,7 @@ class DoS
     }
 
     /**
-     * Starts an UPD attack
+     * Starts an UDP attack
      * @throws Exception on socket error
      */
     public function flood()
