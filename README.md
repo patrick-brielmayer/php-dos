@@ -1,4 +1,4 @@
-# DoS-PHP-Script
+# PHP-DoS
 
 Script to perform a randomized DoS UDP flood attack
 
